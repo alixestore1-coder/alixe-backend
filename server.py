@@ -5,44 +5,69 @@ from datetime import datetime, timedelta
 from jose import JWTError, jwt
 import hashlib
 from typing import Optional, List
+import os
 
-app = FastAPI()
+# -------------------------------------------------
+# Uygulama
+# -------------------------------------------------
+app = FastAPI(title="A'LIXE Backend", version="1.0.0")
 
-# CORS
+# -------------------------------------------------
+# CORS AYARI
+# -------------------------------------------------
+# Ortam değişkenlerinden oku (Render'da FRONTEND_ORIGIN olarak ayarlayabilirsin)
+FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "https://panel.alixestore.com")
+
+origins = [
+    FRONTEND_ORIGIN,       # Canlı panel domaini
+    "http://localhost:5173",  # Lokal geliştirme (Vite)
+]
+
+# None veya boş olanları temizle
+origins = [o for o in origins if o]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# JWT ayarları
-SECRET_KEY = "supersecretkey"
+# -------------------------------------------------
+# JWT AYARLARI
+# -------------------------------------------------
+SECRET_KEY = os.getenv("SECRET_KEY", "supersecretkey")  # Render'da SECRET_KEY ayarlayabilirsin
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
-# In-memory kullanıcı listesi
+# -------------------------------------------------
+# IN-MEMORY KULLANICI VERİSİ
+# -------------------------------------------------
 users_db: List[dict] = []
 
 
-# ---------- ŞİFRE KONTROLÜ ----------
+# -------------------------------------------------
+# YARDIMCI FONKSİYONLAR
+# -------------------------------------------------
 def validate_password(password: str):
+    """Şifre kurallarını kontrol et."""
     if len(password) < 8:
         raise HTTPException(status_code=400, detail="Şifre en az 8 karakter olmalı.")
     if not any(ch.isupper() for ch in password):
         raise HTTPException(status_code=400, detail="Şifre en az bir büyük harf içermeli.")
-    # Ardışık 3 rakam kontrolü
+
+    # Ardışık 3 rakam kontrolü (123, 456 vs. yasak)
     for i in range(len(password) - 2):
         if password[i].isdigit() and password[i + 1].isdigit() and password[i + 2].isdigit():
-            if int(password[i + 1]) == int(password[i]) + 1 and int(password[i + 2]) == int(password[i + 1]) + 1:
+            if (int(password[i + 1]) == int(password[i]) + 1 and
+                    int(password[i + 2]) == int(password[i + 1]) + 1):
                 raise HTTPException(
                     status_code=400,
                     detail="Şifre ardışık 3 sayı içeremez (örn. 123, 456, 789).",
                 )
 
 
-# ---------- YARDIMCI ----------
 def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
@@ -55,17 +80,26 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
 
 
 def verify_token(token: str) -> str:
+    """JWT token içinden email'i (sub) döndür, hatalıysa 401 fırlat."""
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email: str = payload.get("sub")
         if email is None:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token geçersiz.")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Token geçersiz."
+            )
         return email
     except JWTError:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token hatalı veya süresi dolmuş.")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token hatalı veya süresi dolmuş."
+        )
 
 
-# ---------- MODELLER ----------
+# -------------------------------------------------
+# Pydantic MODELLERİ
+# -------------------------------------------------
 class RegisterUser(BaseModel):
     username: str
     email: EmailStr
@@ -77,7 +111,9 @@ class LoginUser(BaseModel):
     password: str
 
 
-# ---------- ENDPOINTLER ----------
+# -------------------------------------------------
+# ENDPOINTLER
+# -------------------------------------------------
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
@@ -85,14 +121,16 @@ async def health_check():
 
 @app.post("/register")
 async def register_user(user: RegisterUser):
+    # Şifre kuralı
     validate_password(user.password)
 
-    # email benzersiz mi
+    # Email benzersiz mi?
     for u in users_db:
         if u["email"] == user.email:
             raise HTTPException(status_code=400, detail="Bu email zaten kayıtlı.")
 
-    is_admin = len(users_db) == 0  # ilk kullanıcı admin
+    # İlk kullanıcı admin olsun
+    is_admin = len(users_db) == 0
 
     users_db.append(
         {
